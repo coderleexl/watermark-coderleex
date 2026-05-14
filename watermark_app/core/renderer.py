@@ -47,10 +47,21 @@ TITLE_FONTS = [
 ]
 
 
-def render_image(source_path: str | Path, options: RenderOptions, metadata: PhotoMetadata) -> Image.Image:
+def render_image(
+    source_path: str | Path,
+    options: RenderOptions,
+    metadata: PhotoMetadata,
+    max_source_edge: int | None = None,
+) -> Image.Image:
     with Image.open(source_path) as source:
         image = ImageOps.exif_transpose(source).convert("RGBA")
+    if max_source_edge and max(image.size) > max_source_edge:
+        image.thumbnail((max_source_edge, max_source_edge), resample=Image.Resampling.LANCZOS)
 
+    return render_image_bitmap(image, options, metadata)
+
+
+def render_image_bitmap(image: Image.Image, options: RenderOptions, metadata: PhotoMetadata) -> Image.Image:
     canvas = image
     if options.enable_camera_info and options.template != TemplateKind.NONE:
         if options.template == TemplateKind.LEICA_FRAME:
