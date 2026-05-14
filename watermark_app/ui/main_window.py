@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -24,7 +23,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
-    QStackedWidget,
     QSlider,
     QSpinBox,
     QSplitter,
@@ -494,13 +492,13 @@ class MainWindow(QMainWindow):
         return page
 
     def connect_preview_signal(self, widget) -> None:
-        if isinstance(widget, NumericSlider) or isinstance(widget, QSlider) or isinstance(widget, QSpinBox):
+        if isinstance(widget, (NumericSlider, QSlider, QSpinBox)):
             widget.valueChanged.connect(lambda *_: self.schedule_preview())
         elif isinstance(widget, QComboBox):
             widget.currentIndexChanged.connect(lambda *_: self.schedule_preview())
         elif isinstance(widget, QLineEdit):
             widget.textChanged.connect(lambda *_: self.schedule_preview())
-        elif isinstance(widget, QCheckBox) or isinstance(widget, QGroupBox):
+        elif isinstance(widget, QCheckBox):
             widget.toggled.connect(lambda *_: self.schedule_preview())
 
     def connect_render_setting_signals(self) -> None:
@@ -508,13 +506,13 @@ class MainWindow(QMainWindow):
             self.connect_save_signal(widget)
 
     def connect_save_signal(self, widget) -> None:
-        if isinstance(widget, NumericSlider) or isinstance(widget, QSlider) or isinstance(widget, QSpinBox):
+        if isinstance(widget, (NumericSlider, QSlider, QSpinBox)):
             widget.valueChanged.connect(lambda *_: self.save_render_settings())
         elif isinstance(widget, QComboBox):
             widget.currentIndexChanged.connect(lambda *_: self.save_render_settings())
         elif isinstance(widget, QLineEdit):
             widget.textChanged.connect(lambda *_: self.save_render_settings())
-        elif isinstance(widget, QCheckBox) or isinstance(widget, QGroupBox):
+        elif isinstance(widget, QCheckBox):
             widget.toggled.connect(lambda *_: self.save_render_settings())
 
     def render_setting_widgets(self) -> dict[str, object]:
