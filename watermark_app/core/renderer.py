@@ -23,6 +23,29 @@ ITALIC_FONT_CANDIDATES = [
     "/System/Library/Fonts/Supplemental/Arial Italic.ttf",
 ]
 
+TITLE_FONTS = [
+    ("默认", []),
+    ("Baskerville 古典衬线", ["/System/Library/Fonts/Supplemental/Baskerville.ttc"]),
+    ("Didot 时尚衬线", ["/System/Library/Fonts/Supplemental/Didot.ttc"]),
+    ("Palatino 帕拉提诺", ["/System/Library/Fonts/Supplemental/Palatino.ttc"]),
+    ("Times New Roman 衬线", ["/System/Library/Fonts/Supplemental/Times New Roman.ttf"]),
+    ("Georgia 乔治亚", ["/System/Library/Fonts/Supplemental/Georgia.ttf"]),
+    ("Futura 未来", ["/System/Library/Fonts/Supplemental/Futura.ttc"]),
+    ("Avenir 阿文尼", ["/System/Library/Fonts/Avenir.ttc", "/System/Library/Fonts/Supplemental/Avenir.ttc"]),
+    ("Helvetica Neue 海维提卡", ["/System/Library/Fonts/HelveticaNeue.ttc", "/System/Library/Fonts/Supplemental/HelveticaNeue.ttc"]),
+    ("Impact 粗体", ["/System/Library/Fonts/Supplemental/Impact.ttf"]),
+    ("Copperplate 铜板雕刻", ["/System/Library/Fonts/Supplemental/Copperplate.ttc"]),
+    ("Zapfino 花体", ["/System/Library/Fonts/Zapfino.ttf", "/System/Library/Fonts/Supplemental/Zapfino.ttf"]),
+    ("Snell Roundhand 花体", ["/System/Library/Fonts/Supplemental/Snell Roundhand.ttc"]),
+    ("Apple Chancery 草书", ["/System/Library/Fonts/Supplemental/Apple Chancery.ttf"]),
+    ("Brush Script 手写", ["/System/Library/Fonts/Supplemental/Brush Script.ttf"]),
+    ("Noteworthy 随手写", ["/System/Library/Fonts/Noteworthy.ttc", "/System/Library/Fonts/Supplemental/Noteworthy.ttc"]),
+    ("Marker Felt 马克笔", ["/System/Library/Fonts/MarkerFelt.ttc", "/System/Library/Fonts/Supplemental/MarkerFelt.ttc"]),
+    ("Papyrus 羊皮纸", ["/System/Library/Fonts/Supplemental/Papyrus.ttc"]),
+    ("Chalkduster 粉笔", ["/System/Library/Fonts/Supplemental/Chalkduster.ttf"]),
+    ("Courier New 等宽", ["/System/Library/Fonts/Supplemental/Courier New.ttf"]),
+]
+
 
 def render_image(source_path: str | Path, options: RenderOptions, metadata: PhotoMetadata) -> Image.Image:
     with Image.open(source_path) as source:
@@ -77,10 +100,11 @@ def _render_frame(
     title_size = max(28, int(canvas.width * 0.032 * options.text_scale))
     detail_size = max(13, int(canvas.width * 0.012 * options.text_scale))
     small_size = max(11, int(canvas.width * 0.010 * options.text_scale))
-    title_font = _load_font(title_size)
+    title_font = _load_title_font(title_size, options.title_font_name)
     detail_font = _load_font(detail_size)
     small_font = _load_font(small_size)
     foreground = _with_opacity(foreground, options.opacity)
+    title_fill = _with_opacity(foreground, options.title_opacity)
     accent = _with_opacity(accent, options.opacity)
 
     title = (options.title_text or "CODERLEEX").upper()
@@ -93,7 +117,7 @@ def _render_frame(
         if options.title_position != WatermarkPosition.BOTTOM_CENTER:
             title_anchor = _position_for(canvas.size, (title_width, title_height), options.title_position, margin=max(20, canvas.width // 36))
         title_anchor = _layer_offset_position(title_anchor, canvas.size, (title_width, title_height), options.title_offset_x_percent, options.title_offset_y_percent)
-        _draw_tracking(draw, title, title_anchor, title_font, foreground, tracking=max(5, title_size // 5))
+        _draw_tracking(draw, title, title_anchor, title_font, title_fill, tracking=max(5, title_size // 5))
 
     line_y = title_y + title_size + max(14, bottom // 8)
     line_width = min(canvas.width // 4, 260)
@@ -143,9 +167,10 @@ def _render_blur_frame(image: Image.Image, options: RenderOptions, metadata: Pho
     canvas.alpha_composite(main, (x, y))
 
     draw = ImageDraw.Draw(canvas)
-    title_font = _load_font(max(20, int(canvas_width * 0.026 * options.text_scale)))
+    title_font = _load_title_font(max(20, int(canvas_width * 0.026 * options.text_scale)), options.title_font_name)
     detail_font = _load_font(max(11, int(canvas_width * 0.010 * options.text_scale)))
     fill = _with_opacity((255, 255, 255, 255), options.opacity)
+    title_fill = _with_opacity(fill, options.title_opacity)
     title = options.title_text.strip() or metadata.brand_label or "CODERLEEX"
     text_y = y + main.height + max(18, int(canvas_height * 0.024))
     if options.show_title:
@@ -153,7 +178,7 @@ def _render_blur_frame(image: Image.Image, options: RenderOptions, metadata: Pho
         title_w, title_h = _text_size(draw, title_text, title_font)
         title_anchor = ((canvas_width - title_w) // 2, text_y)
         title_anchor = _layer_offset_position(title_anchor, canvas.size, (title_w, title_h), options.title_offset_x_percent, options.title_offset_y_percent)
-        draw.text(title_anchor, title_text, font=title_font, fill=fill)
+        draw.text(title_anchor, title_text, font=title_font, fill=title_fill)
     camera_text, lens_text, exposure_text = _frame_metadata_text(options, metadata)
     block_anchor = ((canvas_width - int(canvas_width * options.logo_scale)) // 2, text_y + int(canvas_width * 0.04))
     _draw_brand_info_block(canvas, draw, block_anchor, metadata, options, "white", " · ".join(part for part in [camera_text, lens_text] if part), exposure_text, detail_font, fill)
@@ -197,7 +222,10 @@ def _render_hasselblad_caption(image: Image.Image, options: RenderOptions, metad
     draw = ImageDraw.Draw(overlay)
     title_size = max(22, int(canvas.width * 0.036 * options.text_scale))
     detail_size = max(10, int(canvas.width * 0.011 * options.text_scale))
-    title_font = _load_font(title_size, italic=True)
+    if options.title_font_name:
+        title_font = _load_title_font(title_size, options.title_font_name)
+    else:
+        title_font = _load_font(title_size, italic=True)
     detail_font = _load_font(detail_size)
     alpha = int(255 * max(0.05, min(1.0, options.opacity)))
     fill = (255, 255, 255, alpha)
@@ -212,8 +240,11 @@ def _render_hasselblad_caption(image: Image.Image, options: RenderOptions, metad
     title_x = (canvas.width - title_w) // 2
 
     if options.show_title:
+        title_fill = _with_opacity(fill, options.title_opacity)
+        title_shadow_alpha = int(shadow[3] * max(0.05, min(1.0, options.title_opacity)))
+        title_shadow = (shadow[0], shadow[1], shadow[2], title_shadow_alpha)
         title_anchor = _layer_offset_position((title_x, y), canvas.size, (title_w, title_h), options.title_offset_x_percent, options.title_offset_y_percent)
-        _draw_text_with_shadow(draw, title_anchor, title, title_font, fill, shadow)
+        _draw_text_with_shadow(draw, title_anchor, title, title_font, title_fill, title_shadow)
     camera_text, lens_text, exposure_text = _frame_metadata_text(options, metadata)
     block_anchor = ((canvas.width - int(canvas.width * options.logo_scale)) // 2, y + title_h + gap)
     composed = Image.alpha_composite(canvas, overlay)
@@ -472,6 +503,19 @@ def _load_font(size: int, italic: bool = False) -> ImageFont.FreeTypeFont | Imag
         if Path(candidate).exists():
             return ImageFont.truetype(candidate, size=size)
     return ImageFont.load_default()
+
+
+def _load_title_font(size: int, font_name: str, italic: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    if not font_name:
+        return _load_font(size, italic=italic)
+    for name, paths in TITLE_FONTS:
+        if name == font_name:
+            for path in paths:
+                p = Path(path)
+                if p.exists():
+                    return ImageFont.truetype(str(p), size=size)
+            break
+    return _load_font(size, italic=italic)
 
 
 def _text_size(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> tuple[int, int]:

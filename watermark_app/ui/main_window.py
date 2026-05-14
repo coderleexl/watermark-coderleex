@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from watermark_app.core.exif import PhotoMetadata, read_photo_metadata
-from watermark_app.core.renderer import render_image, save_rendered
+from watermark_app.core.renderer import render_image, save_rendered, TITLE_FONTS
 from watermark_app.core.templates import RenderOptions, TemplateKind, WatermarkPosition
 
 
@@ -151,6 +151,16 @@ class MainWindow(QMainWindow):
         self.position_combo.setCurrentText(WatermarkPosition.BOTTOM_RIGHT.value)
 
         self.title_input = QLineEdit("CODERLEEX")
+
+        self.title_font_combo = QComboBox()
+        for name, paths in TITLE_FONTS:
+            if not paths or any(Path(p).exists() for p in paths):
+                self.title_font_combo.addItem(name, name)
+
+        self.title_opacity_slider = self.make_slider(5, 100, 100)
+        self.title_opacity_label = QLabel("100%")
+        self.title_opacity_slider.valueChanged.connect(lambda v: self.title_opacity_label.setText(f"{v}%"))
+
         self.title_offset_x_slider = self.make_slider(-50, 50, 0)
         self.title_offset_y_slider = self.make_slider(-50, 50, 0)
         self.subtitle_input = QLineEdit("")
@@ -226,6 +236,11 @@ class MainWindow(QMainWindow):
         title_section = CollapsibleSection("主标题", checked=True)
         self.title_group = title_section.enable_checkbox
         title_section.form.addRow("主标题", self.title_input)
+        title_section.form.addRow("字体", self.title_font_combo)
+        title_opacity_row = QHBoxLayout()
+        title_opacity_row.addWidget(self.title_opacity_slider)
+        title_opacity_row.addWidget(self.title_opacity_label)
+        title_section.form.addRow("透明度", title_opacity_row)
         title_section.form.addRow("位置", self.position_combo)
         title_section.form.addRow("文字大小", self.text_scale_slider)
         title_section.form.addRow("左右移动", self.title_offset_x_slider)
@@ -314,6 +329,8 @@ class MainWindow(QMainWindow):
             self.template_combo,
             self.position_combo,
             self.title_input,
+            self.title_font_combo,
+            self.title_opacity_slider,
             self.subtitle_input,
             self.detail_template_input,
             self.background_color_input,
@@ -514,6 +531,8 @@ class MainWindow(QMainWindow):
             template=self.template_combo.currentData(),
             position=self.position_combo.currentData(),
             title_text=self.title_input.text(),
+            title_font_name=self.title_font_combo.currentData() or "",
+            title_opacity=self.title_opacity_slider.value() / 100,
             subtitle_text=self.subtitle_input.text(),
             enable_camera_info=self.camera_group.isChecked(),
             enable_signature=self.signature_group.isChecked(),

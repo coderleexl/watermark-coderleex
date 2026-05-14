@@ -25,6 +25,8 @@ class RenderOptions:
     template: TemplateKind = TemplateKind.LEICA_FRAME
     position: WatermarkPosition = WatermarkPosition.BOTTOM_RIGHT
     title_text: str = "CODERLEEX"
+    title_font_name: str = ""
+    title_opacity: float = 1.0
     subtitle_text: str = ""
     enable_camera_info: bool = True
     enable_signature: bool = False
