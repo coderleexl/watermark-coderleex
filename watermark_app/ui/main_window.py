@@ -68,6 +68,21 @@ class ResettableSlider(QSlider):
         self.setValue(self.default_value)
         event.accept()
 
+    def wheelEvent(self, event) -> None:
+        # Only accept wheel events when the slider has explicit focus
+        # (i.e. the user clicked on it). This prevents accidental value
+        # changes when scrolling through a parent QScrollArea.
+        if self.hasFocus():
+            super().wheelEvent(event)
+        else:
+            event.ignore()
+
+    def focusInEvent(self, event) -> None:
+        super().focusInEvent(event)
+
+    def focusOutEvent(self, event) -> None:
+        super().focusOutEvent(event)
+
 
 class CollapsibleSection(QWidget):
     def __init__(self, title: str, checked: bool | None = None) -> None:
@@ -373,7 +388,7 @@ class MainWindow(QMainWindow):
         slider.setRange(minimum, maximum)
         slider.setValue(value)
         slider.setTracking(True)
-        slider.setToolTip("双击恢复默认值")
+        slider.setToolTip("双击恢复默认值 · 单击后可用滚轮调节")
         return slider
 
     def on_opacity_changed(self, value: int) -> None:
