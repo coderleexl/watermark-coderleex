@@ -5,12 +5,13 @@ from pathlib import Path
 
 from PIL import Image
 from PIL.ImageQt import ImageQt
-from PySide6.QtCore import QSettings, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, QSettings, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSlider,
@@ -36,7 +38,8 @@ from watermark_app.core.renderer import render_image, save_rendered, TITLE_FONTS
 from watermark_app.core.templates import RenderOptions, TemplateKind, WatermarkPosition
 
 
-WATERMARK_DIR = Path("/Users/lixinglin/Documents/水印")
+LEGACY_WATERMARK_DIR = Path("/Users/lixinglin/Documents/水印")
+WATERMARK_DIR = Path(__file__).resolve().parents[2] / "waterTmp"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"}
 PREVIEW_MAX_SOURCE_EDGE = 1400
 
@@ -218,6 +221,79 @@ class CollapsibleSection(QWidget):
         return True if self.enable_checkbox is None else self.enable_checkbox.isChecked()
 
 
+class ExportWorker(QObject):
+    progress = Signal(int, int, str)
+    finished = Signal(int, int, bool, str)
+
+    def __init__(self, jobs: list[tuple[Path, Path]], options: RenderOptions) -> None:
+        super().__init__()
+        self.jobs = jobs
+        self.options = options
+        self.cancel_requested = False
+
+    def cancel(self) -> None:
+        self.cancel_requested = True
+
+    def run(self) -> None:
+        total = len(self.jobs)
+        completed = 0
+        errors: list[str] = []
+        for index, (source, output) in enumerate(self.jobs, start=1):
+            if self.cancel_requested:
+                break
+            self.progress.emit(index - 1, total, source.name)
+            try:
+                metadata = read_photo_metadata(source)
+                rendered = render_image(source, self.options, metadata)
+                save_rendered(rendered, output, self.options.jpg_quality)
+                completed += 1
+            except Exception as exc:
+                errors.append(f"{source.name}: {exc}")
+        canceled = self.cancel_requested
+        message = "\n".join(errors[:5])
+        if len(errors) > 5:
+            message += f"\n... 还有 {len(errors) - 5} 个错误"
+        self.progress.emit(completed, total, "完成" if not canceled else "已取消")
+        self.finished.emit(completed, total, canceled, message)
+
+
+class ExportProgressDialog(QDialog):
+    cancelRequested = Signal()
+
+    def __init__(self, total: int, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("导出中")
+        self.setModal(False)
+        self.setMinimumWidth(380)
+        self.status_label = QLabel("准备导出...")
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, max(1, total))
+        self.progress_bar.setValue(0)
+        self.cancel_button = QPushButton("取消")
+        self.cancel_button.clicked.connect(self.on_cancel_clicked)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.status_label)
+        layout.addWidget(self.progress_bar)
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        button_row.addWidget(self.cancel_button)
+        layout.addLayout(button_row)
+
+    def update_progress(self, completed: int, total: int, name: str) -> None:
+        self.progress_bar.setMaximum(max(1, total))
+        self.progress_bar.setValue(completed)
+        self.status_label.setText(f"{completed} / {total}    {name}")
+
+    def on_cancel_clicked(self) -> None:
+        self.cancel_button.setEnabled(False)
+        self.status_label.setText("正在取消，当前图片导出完成后停止...")
+        self.cancelRequested.emit()
+
+    def reject(self) -> None:
+        self.on_cancel_clicked()
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -228,7 +304,10 @@ class MainWindow(QMainWindow):
         self.current_metadata = PhotoMetadata()
         self.settings = QSettings("coderleex", "watermark")
         self._restoring_settings = False
-        self.watermark_dir = Path(self.settings.value("watermark_dir", str(WATERMARK_DIR)))
+        self.export_thread: QThread | None = None
+        self.export_worker: ExportWorker | None = None
+        self.export_dialog: ExportProgressDialog | None = None
+        self.watermark_dir = self.initial_watermark_dir()
         self.preview_timer = QTimer(self)
         self.preview_timer.setSingleShot(True)
         self.preview_timer.timeout.connect(self.update_preview)
@@ -364,6 +443,8 @@ class MainWindow(QMainWindow):
         self.exif_position_combo.setCurrentText(WatermarkPosition.BOTTOM_LEFT.value)
         self.exif_scale_slider = self.make_slider(35, 250, 100)
         self.exif_opacity_slider = self.make_slider(5, 100, 85)
+        self.exif_line_spacing_slider = self.make_slider(0, 200, 25)
+        self.exif_second_line_indent_slider = self.make_slider(-20, 80, 0)
         self.exif_offset_x_slider = self.make_slider(-50, 50, 0)
         self.exif_offset_y_slider = self.make_slider(-50, 50, 0)
         exif_section.form.addRow("EXIF", self.use_exif_checkbox)
@@ -372,6 +453,8 @@ class MainWindow(QMainWindow):
         exif_section.form.addRow("位置", self.exif_position_combo)
         exif_section.form.addRow("大小", self.exif_scale_slider)
         exif_section.form.addRow("透明度", self.exif_opacity_slider)
+        exif_section.form.addRow("行间距", self.exif_line_spacing_slider)
+        exif_section.form.addRow("第二行缩进", self.exif_second_line_indent_slider)
         exif_section.form.addRow("左右移动", self.exif_offset_x_slider)
         exif_section.form.addRow("上下移动", self.exif_offset_y_slider)
         scroll_layout.addWidget(exif_section)
@@ -447,6 +530,8 @@ class MainWindow(QMainWindow):
             self.exif_position_combo,
             self.exif_scale_slider,
             self.exif_opacity_slider,
+            self.exif_line_spacing_slider,
+            self.exif_second_line_indent_slider,
             self.exif_offset_x_slider,
             self.exif_offset_y_slider,
             signature_group,
@@ -490,6 +575,13 @@ class MainWindow(QMainWindow):
         layout.addLayout(form)
         layout.addStretch(1)
         return page
+
+    def initial_watermark_dir(self) -> Path:
+        configured = Path(self.settings.value("watermark_dir", str(WATERMARK_DIR)))
+        if configured == LEGACY_WATERMARK_DIR or not configured.exists():
+            self.settings.setValue("watermark_dir", str(WATERMARK_DIR))
+            return WATERMARK_DIR
+        return configured
 
     def connect_preview_signal(self, widget) -> None:
         if isinstance(widget, (NumericSlider, QSlider, QSpinBox)):
@@ -539,6 +631,8 @@ class MainWindow(QMainWindow):
             "exif_position": self.exif_position_combo,
             "exif_scale": self.exif_scale_slider,
             "exif_opacity": self.exif_opacity_slider,
+            "exif_line_spacing": self.exif_line_spacing_slider,
+            "exif_second_line_indent": self.exif_second_line_indent_slider,
             "exif_offset_x": self.exif_offset_x_slider,
             "exif_offset_y": self.exif_offset_y_slider,
             "enable_signature": self.signature_group,
@@ -656,10 +750,14 @@ class MainWindow(QMainWindow):
         self.watermark_combo.addItem("无", "")
         self.watermark_dir_label.setText(str(self.watermark_dir))
         if self.watermark_dir.exists():
-            for path in sorted(self.watermark_dir.glob("*.png")):
+            for path in sorted(self.watermark_dir.rglob("*.png")):
                 if path.name.startswith("ChatGPT Image"):
                     continue
-                self.watermark_combo.addItem(path.name, str(path))
+                try:
+                    label = str(path.relative_to(self.watermark_dir))
+                except ValueError:
+                    label = path.name
+                self.watermark_combo.addItem(label, str(path))
 
     def restore_watermark_selection(self) -> None:
         self.settings.beginGroup("render")
@@ -668,23 +766,21 @@ class MainWindow(QMainWindow):
         self.set_combo_value(self.watermark_combo, value)
 
     def choose_watermark_dir(self) -> None:
-        directory = QFileDialog.getExistingDirectory(self, "选择水印素材目录", str(self.watermark_dir))
+        directory = self.choose_directory("选择水印素材目录", self.watermark_dir)
         if not directory:
             return
-        self.watermark_dir = Path(directory)
+        self.watermark_dir = directory
         self.settings.setValue("watermark_dir", str(self.watermark_dir))
         self.load_watermarks()
         self.restore_watermark_selection()
         self.schedule_preview()
 
     def choose_files(self) -> None:
-        files, _ = QFileDialog.getOpenFileNames(
-            self,
-            "选择照片（可多选）",
-            str(Path.home()),
-            "Images (*.jpg *.jpeg *.png *.tif *.tiff *.webp)",
-        )
-        self.add_files(files)
+        dialog = self.make_file_dialog("选择照片（可多选）", Path.home())
+        dialog.setFileMode(QFileDialog.ExistingFiles)
+        dialog.setNameFilter("图片 (*.jpg *.jpeg *.png *.tif *.tiff *.webp)")
+        if dialog.exec() == QDialog.Accepted:
+            self.add_files(dialog.selectedFiles())
 
     def add_files(self, files: list[str]) -> None:
         added = False
@@ -782,6 +878,8 @@ class MainWindow(QMainWindow):
             exif_position=self.exif_position_combo.currentData(),
             exif_scale=self.exif_scale_slider.value() / 100,
             exif_opacity=self.exif_opacity_slider.value() / 100,
+            exif_line_spacing=self.exif_line_spacing_slider.value() / 100,
+            exif_second_line_indent_percent=self.exif_second_line_indent_slider.value() / 100,
             exif_offset_x_percent=self.exif_offset_x_slider.value() / 100,
             exif_offset_y_percent=self.exif_offset_y_slider.value() / 100,
             show_brand_logo=self.logo_group.isChecked(),
@@ -832,31 +930,111 @@ class MainWindow(QMainWindow):
         if path is None:
             QMessageBox.information(self, "没有照片", "请先导入一张照片。")
             return
-        default = path.with_name(f"{path.stem}_watermarked.jpg")
-        output, _ = QFileDialog.getSaveFileName(self, "导出照片", str(default), "JPEG (*.jpg);;PNG (*.png)")
+        if self.export_thread is not None:
+            QMessageBox.information(self, "正在导出", "当前已有导出任务正在运行。")
+            return
+        export_dir = self.last_export_dir()
+        default = export_dir / f"{path.stem}_watermarked.jpg"
+        output = self.choose_export_file(default)
         if not output:
             return
-        self.export_one(path, Path(output))
-        QMessageBox.information(self, "已导出", str(output))
+        self.save_last_export_dir(output.parent)
+        self.start_export([(path, output)])
 
     def export_all(self) -> None:
         if not self.photo_paths:
             QMessageBox.information(self, "没有照片", "请先导入照片。")
             return
-        directory = QFileDialog.getExistingDirectory(self, "选择批量导出目录", str(Path.home()))
+        if self.export_thread is not None:
+            QMessageBox.information(self, "正在导出", "当前已有导出任务正在运行。")
+            return
+        directory = self.choose_directory("选择批量导出目录", self.last_export_dir())
         if not directory:
             return
-        output_dir = Path(directory)
-        for path in self.photo_paths:
-            output = output_dir / f"{path.stem}_watermarked.jpg"
-            metadata = read_photo_metadata(path)
-            rendered = render_image(path, self.collect_options(), metadata)
-            save_rendered(rendered, output, self.quality_spin.value())
-        QMessageBox.information(self, "批量导出完成", f"已导出 {len(self.photo_paths)} 张照片。")
+        output_dir = directory
+        self.save_last_export_dir(output_dir)
+        jobs = [(path, output_dir / f"{path.stem}_watermarked.jpg") for path in self.photo_paths]
+        self.start_export(jobs)
 
-    def export_one(self, source: Path, output: Path) -> None:
-        rendered = render_image(source, self.collect_options(), read_photo_metadata(source))
-        save_rendered(rendered, output, self.quality_spin.value())
+    def make_file_dialog(self, title: str, directory: Path) -> QFileDialog:
+        dialog = QFileDialog(self, title, str(directory))
+        dialog.setOption(QFileDialog.DontUseNativeDialog, True)
+        dialog.setLabelText(QFileDialog.LookIn, "位置")
+        dialog.setLabelText(QFileDialog.FileName, "文件名")
+        dialog.setLabelText(QFileDialog.FileType, "文件类型")
+        dialog.setLabelText(QFileDialog.Accept, "确定")
+        dialog.setLabelText(QFileDialog.Reject, "取消")
+        return dialog
+
+    def choose_directory(self, title: str, directory: Path) -> Path | None:
+        dialog = self.make_file_dialog(title, directory)
+        dialog.setFileMode(QFileDialog.Directory)
+        dialog.setOption(QFileDialog.ShowDirsOnly, True)
+        if dialog.exec() != QDialog.Accepted:
+            return None
+        selected = dialog.selectedFiles()
+        return Path(selected[0]) if selected else None
+
+    def choose_export_file(self, default_path: Path) -> Path | None:
+        dialog = self.make_file_dialog("导出照片", default_path.parent)
+        dialog.setAcceptMode(QFileDialog.AcceptSave)
+        dialog.setFileMode(QFileDialog.AnyFile)
+        dialog.setNameFilters(["JPEG (*.jpg)", "PNG (*.png)"])
+        dialog.selectFile(default_path.name)
+        if dialog.exec() != QDialog.Accepted:
+            return None
+        selected = dialog.selectedFiles()
+        if not selected:
+            return None
+        output = Path(selected[0])
+        if not output.suffix:
+            output = output.with_suffix(".jpg")
+        return output
+
+    def last_export_dir(self) -> Path:
+        path = Path(self.settings.value("last_export_dir", str(Path.home())))
+        return path if path.exists() else Path.home()
+
+    def save_last_export_dir(self, directory: Path) -> None:
+        self.settings.setValue("last_export_dir", str(directory))
+
+    def start_export(self, jobs: list[tuple[Path, Path]]) -> None:
+        options = self.collect_options()
+        thread = QThread(self)
+        worker = ExportWorker(jobs, options)
+        dialog = ExportProgressDialog(len(jobs), self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(dialog.update_progress)
+        worker.finished.connect(self.on_export_finished)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self.clear_export_task)
+        dialog.cancelRequested.connect(worker.cancel)
+
+        self.export_thread = thread
+        self.export_worker = worker
+        self.export_dialog = dialog
+        dialog.show()
+        thread.start()
+
+    def on_export_finished(self, completed: int, total: int, canceled: bool, message: str) -> None:
+        if self.export_dialog:
+            self.export_dialog.accept()
+        if canceled:
+            QMessageBox.information(self, "导出已取消", f"已导出 {completed} / {total} 张照片。")
+        elif message:
+            QMessageBox.warning(self, "导出完成但有错误", f"已导出 {completed} / {total} 张照片。\n\n{message}")
+        elif total == 1:
+            QMessageBox.information(self, "已导出", "照片导出完成。")
+        else:
+            QMessageBox.information(self, "批量导出完成", f"已导出 {completed} 张照片。")
+
+    def clear_export_task(self) -> None:
+        self.export_thread = None
+        self.export_worker = None
+        self.export_dialog = None
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)

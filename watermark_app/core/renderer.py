@@ -289,15 +289,18 @@ def _draw_camera_param_block(
     font: ImageFont.ImageFont,
     fill: tuple[int, int, int, int],
     max_width: int,
+    line_spacing: int,
+    second_line_indent: int,
 ) -> None:
     x, y = xy
     if line1:
         line1_font = _fit_font(draw, line1, font, max_width)
         draw.text((x, y), line1, font=line1_font, fill=fill)
-        y += max(_text_size(draw, line1, line1_font)[1], getattr(line1_font, "size", 12)) + 4
+        y += max(_text_size(draw, line1, line1_font)[1], getattr(line1_font, "size", 12)) + line_spacing
     if line2:
-        line2_font = _fit_font(draw, line2, font, max_width)
-        draw.text((x, y), line2, font=line2_font, fill=fill)
+        line2_x = x + second_line_indent
+        line2_font = _fit_font(draw, line2, font, max(40, max_width - second_line_indent))
+        draw.text((line2_x, y), line2, font=line2_font, fill=fill)
 
 
 def _draw_brand_info_block(
@@ -328,7 +331,19 @@ def _draw_brand_info_block(
         text_xy = _layer_offset_position(text_xy, canvas.size, (max_width, getattr(font, "size", 12) * 3), options.exif_offset_x_percent, options.exif_offset_y_percent)
         exif_font = _font_with_scaled_size(font, options.exif_scale)
         exif_fill = _with_opacity(fill, options.exif_opacity)
-        _draw_camera_param_block(draw, text_xy, line1, line2, exif_font, exif_fill, max_width=max_width)
+        line_spacing = max(0, int(getattr(exif_font, "size", 12) * options.exif_line_spacing))
+        second_line_indent = int(canvas.width * options.exif_second_line_indent_percent)
+        _draw_camera_param_block(
+            draw,
+            text_xy,
+            line1,
+            line2,
+            exif_font,
+            exif_fill,
+            max_width=max_width,
+            line_spacing=line_spacing,
+            second_line_indent=second_line_indent,
+        )
 
 
 def _inline_metadata_text(options: RenderOptions, metadata: PhotoMetadata) -> str:

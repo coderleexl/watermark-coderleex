@@ -45,6 +45,8 @@ class RenderOptions:
     exif_position: WatermarkPosition = WatermarkPosition.BOTTOM_LEFT
     exif_scale: float = 1.0
     exif_opacity: float = 0.85
+    exif_line_spacing: float = 0.25
+    exif_second_line_indent_percent: float = 0.0
     exif_offset_x_percent: float = 0.0
     exif_offset_y_percent: float = 0.0
     show_brand_logo: bool = True
