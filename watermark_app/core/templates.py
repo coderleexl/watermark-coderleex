@@ -11,6 +11,20 @@ class TemplateKind(str, Enum):
     BLUR_FRAME = "模糊背景印框"
 
 
+class BlurStyle(str, Enum):
+    GAUSSIAN = "高斯模糊"
+    SOFT_FOCUS = "柔焦背景"
+    VIGNETTE_GLASS = "暗角毛玻璃"
+    CENTER_CLEAR = "中心清晰"
+    GRADIENT_BLUR = "渐变模糊"
+    RADIAL_ZOOM = "径向缩放"
+    MOTION_BLUR = "轻微运动"
+    MISTY_FILM = "降噪柔雾"
+    DARK_CINEMA = "暗色电影"
+    BRIGHT_CREAM = "亮色奶油"
+    GRAIN_SOFT = "颗粒柔焦"
+
+
 class WatermarkPosition(str, Enum):
     BOTTOM_LEFT = "左下"
     BOTTOM_RIGHT = "右下"
@@ -63,6 +77,7 @@ class RenderOptions:
     corner_radius_percent: float = 0.0
     shadow_percent: float = 0.0
     blur_percent: float = 0.45
+    blur_style: BlurStyle = BlurStyle.GAUSSIAN
     background_color: str = "#f8f7f4"
     jpg_quality: int = 95
     png_watermark_path: str = ""

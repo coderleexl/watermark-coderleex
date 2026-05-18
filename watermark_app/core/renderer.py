@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
@@ -7,7 +8,7 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 from watermark_app.core.exif import PhotoMetadata
 from watermark_app.core.formatter import format_metadata_template
 from watermark_app.core.logos import load_brand_logo
-from watermark_app.core.templates import RenderOptions, TemplateKind, WatermarkPosition
+from watermark_app.core.templates import BlurStyle, RenderOptions, TemplateKind, WatermarkPosition
 
 
 FONT_CANDIDATES = [
@@ -109,8 +110,8 @@ def _render_frame(
 
     draw = ImageDraw.Draw(canvas)
     title_size = max(28, int(canvas.width * 0.032 * options.text_scale))
-    detail_size = max(13, int(canvas.width * 0.012 * options.text_scale))
-    small_size = max(11, int(canvas.width * 0.010 * options.text_scale))
+    detail_size = max(13, int(canvas.width * 0.012))
+    small_size = max(11, int(canvas.width * 0.010))
     title_font = _load_title_font(title_size, options.title_font_name)
     detail_font = _load_font(detail_size)
     small_font = _load_font(small_size)
@@ -160,9 +161,8 @@ def _render_blur_frame(image: Image.Image, options: RenderOptions, metadata: Pho
     background = image.copy()
     background = ImageOps.fit(background, (canvas_width, canvas_height), method=Image.Resampling.LANCZOS)
     blur_radius = max(8, int(min(canvas_width, canvas_height) * max(0.05, min(1.0, options.blur_percent)) * 0.08))
-    background = background.filter(ImageFilter.GaussianBlur(blur_radius))
-    overlay = Image.new("RGBA", background.size, (0, 0, 0, 68))
-    canvas = Image.alpha_composite(background, overlay)
+    background = _apply_blur_style(background, blur_radius, options)
+    canvas = Image.alpha_composite(background, Image.new("RGBA", background.size, (0, 0, 0, 68)))
 
     main = _prepare_main_image(image, options)
     main_target_width = int(canvas_width * max(0.45, min(0.96, options.main_image_percent)))
@@ -179,7 +179,7 @@ def _render_blur_frame(image: Image.Image, options: RenderOptions, metadata: Pho
 
     draw = ImageDraw.Draw(canvas)
     title_font = _load_title_font(max(20, int(canvas_width * 0.026 * options.text_scale)), options.title_font_name)
-    detail_font = _load_font(max(11, int(canvas_width * 0.010 * options.text_scale)))
+    detail_font = _load_font(max(11, int(canvas_width * 0.010)))
     fill = _with_opacity((255, 255, 255, 255), options.opacity)
     title_fill = _with_opacity(fill, options.title_opacity)
     title = options.title_text.strip() or metadata.brand_label or "CODERLEEX"
@@ -194,6 +194,169 @@ def _render_blur_frame(image: Image.Image, options: RenderOptions, metadata: Pho
     block_anchor = ((canvas_width - int(canvas_width * options.logo_scale)) // 2, text_y + int(canvas_width * 0.04))
     _draw_brand_info_block(canvas, draw, block_anchor, metadata, options, "white", " · ".join(part for part in [camera_text, lens_text] if part), exposure_text, detail_font, fill)
     return canvas
+
+
+def _apply_blur_style(image: Image.Image, blur_radius: int, options: RenderOptions) -> Image.Image:
+    if options.blur_style == BlurStyle.SOFT_FOCUS:
+        return _soft_focus_background(image, blur_radius)
+    if options.blur_style == BlurStyle.VIGNETTE_GLASS:
+        return _vignette_glass_background(image, blur_radius)
+    if options.blur_style == BlurStyle.CENTER_CLEAR:
+        return _center_clear_background(image, blur_radius)
+    if options.blur_style == BlurStyle.GRADIENT_BLUR:
+        return _gradient_blur_background(image, blur_radius)
+    if options.blur_style == BlurStyle.RADIAL_ZOOM:
+        return _radial_zoom_background(image, blur_radius)
+    if options.blur_style == BlurStyle.MOTION_BLUR:
+        return _motion_blur_background(image, blur_radius)
+    if options.blur_style == BlurStyle.MISTY_FILM:
+        return _misty_film_background(image, blur_radius)
+    if options.blur_style == BlurStyle.DARK_CINEMA:
+        return _dark_cinema_background(image, blur_radius)
+    if options.blur_style == BlurStyle.BRIGHT_CREAM:
+        return _bright_cream_background(image, blur_radius)
+    if options.blur_style == BlurStyle.GRAIN_SOFT:
+        return _grain_soft_background(image, blur_radius)
+    return image.filter(ImageFilter.GaussianBlur(blur_radius))
+
+
+def _soft_focus_background(image: Image.Image, blur_radius: int) -> Image.Image:
+    light_blur = image.filter(ImageFilter.GaussianBlur(max(2, blur_radius // 3)))
+    heavy_blur = image.filter(ImageFilter.GaussianBlur(max(6, int(blur_radius * 1.25))))
+    blended = Image.blend(light_blur, heavy_blur, 0.62)
+    blended = ImageEnhance.Contrast(blended).enhance(1.05)
+    return ImageEnhance.Sharpness(blended).enhance(0.82)
+
+
+def _vignette_glass_background(image: Image.Image, blur_radius: int) -> Image.Image:
+    blurred = image.filter(ImageFilter.GaussianBlur(max(8, int(blur_radius * 1.1))))
+    blurred = ImageEnhance.Color(blurred).enhance(0.78)
+    blurred = ImageEnhance.Contrast(blurred).enhance(0.92)
+    blurred = ImageEnhance.Brightness(blurred).enhance(0.88).convert("RGBA")
+
+    width, height = blurred.size
+    mask = Image.new("L", (width, height), 0)
+    draw = ImageDraw.Draw(mask)
+    inset_x = int(width * 0.16)
+    inset_y = int(height * 0.16)
+    draw.ellipse((inset_x, inset_y, width - inset_x, height - inset_y), fill=190)
+    mask = mask.filter(ImageFilter.GaussianBlur(max(width, height) // 5))
+    vignette_alpha = Image.eval(mask, lambda p: max(0, 150 - int(p * 0.68)))
+    vignette = Image.new("RGBA", blurred.size, (0, 0, 0, 0))
+    vignette.putalpha(vignette_alpha)
+    return Image.alpha_composite(blurred, vignette)
+
+
+def _center_clear_background(image: Image.Image, blur_radius: int) -> Image.Image:
+    blurred = image.filter(ImageFilter.GaussianBlur(max(8, int(blur_radius * 1.15))))
+    clear = image.filter(ImageFilter.GaussianBlur(max(1, blur_radius // 5)))
+    mask = _radial_mask(image.size, inner=0.14, outer=0.58, invert=False)
+    return Image.composite(clear, blurred, mask)
+
+
+def _gradient_blur_background(image: Image.Image, blur_radius: int) -> Image.Image:
+    light = image.filter(ImageFilter.GaussianBlur(max(2, blur_radius // 4)))
+    heavy = image.filter(ImageFilter.GaussianBlur(max(8, int(blur_radius * 1.25))))
+    width, height = image.size
+    mask = Image.new("L", (width, height), 0)
+    pixels = mask.load()
+    for y in range(height):
+        value = int(255 * (y / max(1, height - 1)) ** 1.35)
+        for x in range(width):
+            pixels[x, y] = value
+    mask = mask.filter(ImageFilter.GaussianBlur(max(2, height // 80)))
+    return Image.composite(heavy, light, mask)
+
+
+def _radial_zoom_background(image: Image.Image, blur_radius: int) -> Image.Image:
+    base = image.convert("RGBA")
+    width, height = base.size
+    accum = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    steps = 9
+    max_zoom = 1.0 + min(0.12, blur_radius / max(width, height) * 1.8)
+    for step in range(steps):
+        zoom = 1.0 + (max_zoom - 1.0) * (step / max(1, steps - 1))
+        scaled = base.resize((int(width * zoom), int(height * zoom)), Image.Resampling.BICUBIC)
+        left = (scaled.width - width) // 2
+        top = (scaled.height - height) // 2
+        frame = scaled.crop((left, top, left + width, top + height))
+        accum = Image.blend(accum, frame, 1 / (step + 1))
+    return accum
+
+
+def _motion_blur_background(image: Image.Image, blur_radius: int) -> Image.Image:
+    base = image.convert("RGBA").filter(ImageFilter.GaussianBlur(max(1, blur_radius // 5)))
+    width, height = base.size
+    accum = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    steps = 13
+    distance = max(4, min(width // 18, blur_radius * 2))
+    for step in range(steps):
+        t = step - steps // 2
+        shifted = Image.new("RGBA", base.size, (0, 0, 0, 0))
+        shifted.alpha_composite(base, (int(t * distance / steps), int(t * distance / steps * 0.28)))
+        accum = Image.blend(accum, shifted, 1 / (step + 1))
+    return ImageEnhance.Contrast(accum).enhance(0.96)
+
+
+def _misty_film_background(image: Image.Image, blur_radius: int) -> Image.Image:
+    blurred = image.filter(ImageFilter.GaussianBlur(max(6, blur_radius)))
+    blurred = ImageEnhance.Color(blurred).enhance(0.72)
+    blurred = ImageEnhance.Contrast(blurred).enhance(0.82)
+    blurred = ImageEnhance.Brightness(blurred).enhance(1.10).convert("RGBA")
+    veil = Image.new("RGBA", blurred.size, (245, 242, 236, 34))
+    return Image.alpha_composite(blurred, veil)
+
+
+def _dark_cinema_background(image: Image.Image, blur_radius: int) -> Image.Image:
+    blurred = image.filter(ImageFilter.GaussianBlur(max(8, int(blur_radius * 1.05))))
+    blurred = ImageEnhance.Color(blurred).enhance(0.62)
+    blurred = ImageEnhance.Contrast(blurred).enhance(1.18)
+    blurred = ImageEnhance.Brightness(blurred).enhance(0.72).convert("RGBA")
+    vignette = Image.new("RGBA", blurred.size, (0, 0, 0, 0))
+    vignette.putalpha(_radial_mask(blurred.size, inner=0.16, outer=0.68, invert=True).point(lambda p: int(p * 0.68)))
+    return Image.alpha_composite(blurred, vignette)
+
+
+def _bright_cream_background(image: Image.Image, blur_radius: int) -> Image.Image:
+    blurred = image.filter(ImageFilter.GaussianBlur(max(8, int(blur_radius * 1.12))))
+    blurred = ImageEnhance.Color(blurred).enhance(0.82)
+    blurred = ImageEnhance.Contrast(blurred).enhance(0.76)
+    blurred = ImageEnhance.Brightness(blurred).enhance(1.16).convert("RGBA")
+    warm = Image.new("RGBA", blurred.size, (255, 238, 210, 34))
+    return Image.alpha_composite(blurred, warm)
+
+
+def _grain_soft_background(image: Image.Image, blur_radius: int) -> Image.Image:
+    softened = _soft_focus_background(image, blur_radius).convert("RGBA")
+    rng = random.Random(17)
+    grain = Image.new("L", softened.size, 0)
+    pixels = grain.load()
+    width, height = softened.size
+    for y in range(height):
+        for x in range(width):
+            pixels[x, y] = rng.randint(0, 34)
+    grain = grain.filter(ImageFilter.GaussianBlur(0.35))
+    grain_layer = Image.new("RGBA", softened.size, (255, 255, 255, 0))
+    grain_layer.putalpha(grain.point(lambda p: int(p * 0.32)))
+    return Image.alpha_composite(softened, grain_layer)
+
+
+def _radial_mask(size: tuple[int, int], inner: float, outer: float, invert: bool) -> Image.Image:
+    width, height = size
+    mask = Image.new("L", size, 0)
+    pixels = mask.load()
+    cx = width / 2
+    cy = height / 2
+    max_distance = (cx * cx + cy * cy) ** 0.5
+    inner_px = max_distance * inner
+    outer_px = max_distance * outer
+    span = max(1, outer_px - inner_px)
+    for y in range(height):
+        for x in range(width):
+            distance = ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5
+            value = int(max(0, min(1, (distance - inner_px) / span)) * 255)
+            pixels[x, y] = 255 - value if not invert else value
+    return mask.filter(ImageFilter.GaussianBlur(max(2, min(width, height) // 70)))
 
 
 def _render_signature_watermark(image: Image.Image, options: RenderOptions, metadata: PhotoMetadata) -> Image.Image:
@@ -232,7 +395,7 @@ def _render_hasselblad_caption(image: Image.Image, options: RenderOptions, metad
     overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
     title_size = max(22, int(canvas.width * 0.036 * options.text_scale))
-    detail_size = max(10, int(canvas.width * 0.011 * options.text_scale))
+    detail_size = max(10, int(canvas.width * 0.011))
     if options.title_font_name:
         title_font = _load_title_font(title_size, options.title_font_name)
     else:
