@@ -6,14 +6,14 @@ from pathlib import Path
 from PIL import Image, ImageOps
 from PIL.ImageQt import ImageQt
 from PySide6.QtCore import QObject, QRect, QSize, QSettings, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QPixmap
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView,
     QDialog,
     QFileDialog,
-    QFormLayout,
     QHBoxLayout,
+    QInputDialog,
     QListWidgetItem,
     QMessageBox,
     QSplitter,
@@ -27,7 +27,6 @@ from qfluentwidgets import (
     CheckBox as QCheckBox,
     ComboBox as QComboBox,
     OpacityAniStackedWidget,
-    DoubleSpinBox as QDoubleSpinBox,
     FluentIcon,
     FluentTitleBar,
     FluentWindow,
@@ -36,7 +35,6 @@ from qfluentwidgets import (
     PrimaryPushButton,
     ProgressBar as QProgressBar,
     PushButton as QPushButton,
-    ScrollArea as QScrollArea,
     SegmentedWidget,
     Slider as QSlider,
     SpinBox as QSpinBox,
@@ -47,10 +45,21 @@ from qfluentwidgets import (
     setThemeColor,
 )
 
+from watermark_app.core.collage import CollageEngine
+from watermark_app.core.collage_groups import (
+    CollageGroup,
+    CollageGroupStore,
+    layout_by_name,
+    safe_filename,
+    timestamp,
+)
 from watermark_app.core.exif import PhotoMetadata, read_photo_metadata
 from watermark_app.core.presets import Preset, PresetManager
 from watermark_app.core.renderer import render_image, save_rendered, TITLE_FONTS
 from watermark_app.core.templates import BlurStyle, RenderOptions, TemplateKind, WatermarkPosition
+from watermark_app.ui.collage_panel import CollagePanel
+from watermark_app.ui.collage_selector import CollagePhotoSelector
+from watermark_app.ui.common import CollapsibleSection, NumericSlider, make_settings_page
 
 
 LEGACY_WATERMARK_DIR = Path("/Users/lixinglin/Documents/水印")
@@ -105,121 +114,6 @@ class DropTreeWidget(QTreeWidget):
         paths = [url.toLocalFile() for url in event.mimeData().urls() if url.toLocalFile()]
         self.on_files_dropped(paths)
         event.acceptProposedAction()
-
-
-class ResettableSlider(QSlider):
-    def __init__(self, orientation: Qt.Orientation, default_value: int) -> None:
-        super().__init__()
-        self.setOrientation(orientation)
-        self.default_value = default_value
-        if hasattr(self, "handle"):
-            self.handle.installEventFilter(self)
-
-    def eventFilter(self, obj, event) -> bool:
-        if obj is getattr(self, "handle", None) and event.type() == event.Type.MouseButtonDblClick:
-            self.setValue(self.default_value)
-            return True
-        return super().eventFilter(obj, event)
-
-    def mouseDoubleClickEvent(self, event) -> None:
-        self.setValue(self.default_value)
-        event.accept()
-
-    def wheelEvent(self, event) -> None:
-        # Only accept wheel events when the slider has explicit focus
-        # (i.e. the user clicked on it). This prevents accidental value
-        # changes when scrolling through a parent QScrollArea.
-        if self.hasFocus():
-            super().wheelEvent(event)
-        else:
-            event.ignore()
-
-    def focusInEvent(self, event) -> None:
-        super().focusInEvent(event)
-
-    def focusOutEvent(self, event) -> None:
-        super().focusOutEvent(event)
-
-
-class QuietDoubleSpinBox(QDoubleSpinBox):
-    def wheelEvent(self, event) -> None:
-        if self.hasFocus():
-            super().wheelEvent(event)
-        else:
-            event.ignore()
-
-
-class NumericSlider(QWidget):
-    valueChanged = Signal(float)
-
-    def __init__(
-        self,
-        minimum: float,
-        maximum: float,
-        value: float,
-        *,
-        decimals: int = 1,
-        step: float = 0.1,
-        suffix: str = "",
-    ) -> None:
-        super().__init__()
-        self.decimals = decimals
-        self.factor = 10**decimals
-        self.default_value = float(value)
-        self.slider = ResettableSlider(Qt.Horizontal, self._to_slider(value))
-        self.slider.setRange(self._to_slider(minimum), self._to_slider(maximum))
-        self.slider.setSingleStep(max(1, self._to_slider(step)))
-        self.slider.setPageStep(max(1, self._to_slider(step * 10)))
-        self.slider.setTracking(True)
-        self.slider.setToolTip("双击恢复默认值")
-
-        self.input = QuietDoubleSpinBox()
-        self.input.setRange(minimum, maximum)
-        self.input.setDecimals(decimals)
-        self.input.setSingleStep(step)
-        self.input.setSuffix(suffix)
-        self.input.setKeyboardTracking(False)
-        self.input.setSymbolVisible(False)
-        self.input.setFixedWidth(92 if suffix else 84)
-        self.input.setValue(value)
-
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.slider, 1)
-        layout.addWidget(self.input)
-
-        self.slider.valueChanged.connect(self._on_slider_changed)
-        self.input.valueChanged.connect(self._on_input_changed)
-
-    def value(self) -> float:
-        return self.input.value()
-
-    def setValue(self, value: float) -> None:
-        value = max(self.input.minimum(), min(self.input.maximum(), float(value)))
-        self.input.setValue(value)
-        self.slider.setValue(self._to_slider(value))
-
-    def _to_slider(self, value: float) -> int:
-        return int(round(float(value) * self.factor))
-
-    def _from_slider(self, value: int) -> float:
-        return value / self.factor
-
-    def _on_slider_changed(self, value: int) -> None:
-        numeric_value = self._from_slider(value)
-        if abs(self.input.value() - numeric_value) > 1 / self.factor / 2:
-            self.input.blockSignals(True)
-            self.input.setValue(numeric_value)
-            self.input.blockSignals(False)
-        self.valueChanged.emit(numeric_value)
-
-    def _on_input_changed(self, value: float) -> None:
-        slider_value = self._to_slider(value)
-        if self.slider.value() != slider_value:
-            self.slider.blockSignals(True)
-            self.slider.setValue(slider_value)
-            self.slider.blockSignals(False)
-        self.valueChanged.emit(value)
 
 
 class ExifFieldList(QWidget):
@@ -291,48 +185,6 @@ class ExifFieldList(QWidget):
         self.valueChanged.emit()
 
 
-
-
-class CollapsibleSection(QWidget):
-    def __init__(self, title: str, checked: bool | None = None) -> None:
-        super().__init__()
-        self.setObjectName("settingSection")
-        self.title = title
-        self.header = QPushButton()
-        self.header.setCheckable(True)
-        self.header.setChecked(True)
-        self.header.setText(f"⌄ {title}")
-        self.header.clicked.connect(self.on_header_clicked)
-        self.body = QWidget()
-        self.form = QFormLayout(self.body)
-        self.form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        self.form.setContentsMargins(8, 4, 8, 8)
-        self.form.setVerticalSpacing(6)
-        self.form.setHorizontalSpacing(10)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 2, 4, 2)
-        layout.setSpacing(0)
-
-        header_row = QHBoxLayout()
-        header_row.setContentsMargins(4, 0, 8, 0)
-        header_row.addWidget(self.header, 0, Qt.AlignLeft)
-        header_row.addStretch(1)
-        layout.addLayout(header_row)
-        layout.addWidget(self.body)
-        self.enable_checkbox: QCheckBox | None = None
-        if checked is not None:
-            self.enable_checkbox = QCheckBox("启用")
-            self.enable_checkbox.setChecked(checked)
-            header_row.addWidget(self.enable_checkbox)
-    def on_header_clicked(self) -> None:
-        expanded = self.header.isChecked()
-        self.body.setVisible(expanded)
-        self.header.setText(f"{'⌄' if expanded else '›'} {self.title}")
-
-    def is_enabled(self) -> bool:
-        return True if self.enable_checkbox is None else self.enable_checkbox.isChecked()
-
-
 class MacFluentTitleBar(FluentTitleBar):
     def __init__(self, parent) -> None:
         super().__init__(parent)
@@ -346,23 +198,6 @@ class MacFluentTitleBar(FluentTitleBar):
         self.hBoxLayout.removeItem(self.vBoxLayout)
         self.hBoxLayout.insertLayout(0, self.vBoxLayout, 0)
         self.hBoxLayout.insertSpacing(1, 90)
-
-
-def make_settings_page(*sections: QWidget) -> QWidget:
-    page = QScrollArea()
-    page.setObjectName("settingsPage")
-    page.setWidgetResizable(True)
-    page.viewport().setObjectName("settingsViewport")
-    content = QWidget()
-    content.setObjectName("settingsContent")
-    layout = QVBoxLayout(content)
-    layout.setContentsMargins(6, 6, 6, 6)
-    layout.setSpacing(6)
-    for section in sections:
-        layout.addWidget(section)
-    layout.addStretch(1)
-    page.setWidget(content)
-    return page
 
 
 class ExportWorker(QObject):
@@ -392,6 +227,82 @@ class ExportWorker(QObject):
                 completed += 1
             except Exception as exc:
                 errors.append(f"{source.name}: {exc}")
+        canceled = self.cancel_requested
+        message = "\n".join(errors[:5])
+        if len(errors) > 5:
+            message += f"\n... 还有 {len(errors) - 5} 个错误"
+        self.progress.emit(completed, total, "完成" if not canceled else "已取消")
+        self.finished.emit(completed, total, canceled, message)
+
+
+class CollagePreviewWorker(QObject):
+    finished = Signal(int, object, str, str, int, int, tuple)
+
+    def __init__(self, request_id: int, paths: list[Path], layout, options, max_source_edge: int) -> None:
+        super().__init__()
+        self.request_id = request_id
+        self.paths = paths
+        self.layout = layout
+        self.options = options
+        self.max_source_edge = max_source_edge
+
+    def run(self) -> None:
+        try:
+            image = CollageEngine().create_collage_from_paths(
+                self.paths,
+                self.layout,
+                self.options,
+                max_source_edge=self.max_source_edge,
+            )
+            self.finished.emit(
+                self.request_id,
+                image,
+                "",
+                self.layout.name,
+                len(self.paths),
+                self.layout.cell_count,
+                image.size,
+            )
+        except Exception as exc:
+            self.finished.emit(
+                self.request_id,
+                None,
+                str(exc),
+                self.layout.name,
+                len(self.paths),
+                self.layout.cell_count,
+                (0, 0),
+            )
+
+
+class CollageBatchExportWorker(QObject):
+    progress = Signal(int, int, str)
+    finished = Signal(int, int, bool, str)
+
+    def __init__(self, jobs: list[tuple[CollageGroup, Path, int]]) -> None:
+        super().__init__()
+        self.jobs = jobs
+        self.cancel_requested = False
+
+    def cancel(self) -> None:
+        self.cancel_requested = True
+
+    def run(self) -> None:
+        total = len(self.jobs)
+        completed = 0
+        errors: list[str] = []
+        engine = CollageEngine()
+        for index, (group, output, quality) in enumerate(self.jobs, start=1):
+            if self.cancel_requested:
+                break
+            self.progress.emit(index - 1, total, group.name)
+            try:
+                paths = [Path(path) for path in group.photo_paths]
+                image = engine.create_collage_from_paths(paths, layout_by_name(group.layout_name), group.options)
+                save_rendered(image, output, quality)
+                completed += 1
+            except Exception as exc:
+                errors.append(f"{group.name}: {exc}")
         canceled = self.cancel_requested
         message = "\n".join(errors[:5])
         if len(errors) > 5:
@@ -450,17 +361,31 @@ class MainWindow(FluentWindow):
         self.current_metadata = PhotoMetadata()
         self.settings = QSettings("coderleex", "watermark")
         self._restoring_settings = False
+        self._restoring_collage_settings = False
         self.current_ratio_key = "default"
         self.ratio_groups: dict[str, QTreeWidgetItem] = {}
         self.apply_saved_theme()
         self.export_thread: QThread | None = None
         self.export_worker: ExportWorker | None = None
         self.export_dialog: ExportProgressDialog | None = None
+        self.collage_preview_request_id = 0
+        self.collage_preview_jobs: list[tuple[QThread, CollagePreviewWorker]] = []
+        self.collage_batch_thread: QThread | None = None
+        self.collage_batch_worker: CollageBatchExportWorker | None = None
+        self.collage_batch_dialog: ExportProgressDialog | None = None
+        self.collage_group_store = CollageGroupStore()
+        self.current_collage_group_id = ""
+        self.collage_dirty = False
+        self._loading_collage_group = False
         self.watermark_dir = self.initial_watermark_dir()
         self.preset_manager = PresetManager(self.settings)
         self.preview_timer = QTimer(self)
         self.preview_timer.setSingleShot(True)
         self.preview_timer.timeout.connect(self.update_preview)
+        self.collage_engine = CollageEngine()
+        self.collage_preview_timer = QTimer(self)
+        self.collage_preview_timer.setSingleShot(True)
+        self.collage_preview_timer.timeout.connect(self.update_collage_preview)
 
         self.photo_list = DropTreeWidget(self.add_files)
         self.photo_list.currentItemChanged.connect(self.on_photo_changed)
@@ -735,6 +660,7 @@ class MainWindow(FluentWindow):
         splitter.setHandleWidth(3)
         page_layout.addWidget(splitter, 1)
         self.addSubInterface(page, FluentIcon.PHOTO, "水印")
+        self.addSubInterface(self.create_collage_page(), FluentIcon.ALBUM, "拼图")
         self.refresh_theme_styles()
 
         for widget in [
@@ -837,12 +763,554 @@ class MainWindow(FluentWindow):
             getattr(self, "meta_label", None),
             getattr(self, "preview_info_label", None),
             getattr(self, "watermark_dir_label", None),
+            getattr(self, "collage_preview_label", None),
+            getattr(self, "collage_status_label", None),
         ]
         for widget in widgets:
             if widget is not None:
                 widget.style().unpolish(widget)
                 widget.style().polish(widget)
                 widget.update()
+
+    def create_collage_page(self) -> QWidget:
+        self.collage_selector = CollagePhotoSelector(IMAGE_EXTENSIONS)
+        self.collage_panel = CollagePanel()
+        self.collage_panel.optionsChanged.connect(self.schedule_collage_preview)
+        self.collage_panel.optionsChanged.connect(self.save_collage_settings)
+        self.collage_panel.optionsChanged.connect(self.mark_collage_dirty)
+        self.collage_selector.collage_order_changed.connect(lambda *_: self.schedule_collage_preview())
+        self.collage_selector.collage_order_changed.connect(lambda *_: self.mark_collage_dirty())
+
+        import_button = QPushButton("导入照片")
+        import_button.clicked.connect(self.choose_collage_files)
+        clear_button = QPushButton("清空照片")
+        clear_button.clicked.connect(self.clear_collage_photos)
+        export_button = QPushButton("导出当前")
+        export_button.clicked.connect(self.export_collage)
+        add_group_button = PrimaryPushButton("暂存为组")
+        add_group_button.clicked.connect(self.add_collage_group)
+        update_group_button = QPushButton("更新组")
+        update_group_button.clicked.connect(self.update_current_collage_group)
+        rename_group_button = QPushButton("重命名")
+        rename_group_button.clicked.connect(self.rename_current_collage_group)
+        copy_group_button = QPushButton("复制组")
+        copy_group_button.clicked.connect(self.copy_current_collage_group)
+        delete_group_button = QPushButton("删除组")
+        delete_group_button.clicked.connect(self.delete_current_collage_group)
+        batch_export_button = QPushButton("批量导出组")
+        batch_export_button.clicked.connect(self.export_collage_groups)
+        self.collage_export_format_combo = QComboBox()
+        self.collage_export_format_combo.addItem("JPG", userData=".jpg")
+        self.collage_export_format_combo.addItem("PNG", userData=".png")
+
+        page = QWidget()
+        page.setObjectName("collagePage")
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(16, 8, 16, 16)
+        page_layout.setSpacing(10)
+        page_layout.addWidget(TitleLabel("Coderleex Collage"))
+
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(6)
+        button_row = QHBoxLayout()
+        button_row.setSpacing(6)
+        button_row.addWidget(import_button)
+        button_row.addWidget(clear_button)
+        left_layout.addLayout(button_row)
+        left_layout.addWidget(self.collage_selector, 1)
+
+        center = QWidget()
+        center_layout = QVBoxLayout(center)
+        center_layout.setContentsMargins(4, 4, 4, 4)
+        center_layout.setSpacing(4)
+        self.collage_preview_label = QLabel("请选择参与拼图的照片")
+        self.collage_preview_label.setObjectName("previewLabel")
+        self.collage_preview_label.setAlignment(Qt.AlignCenter)
+        self.collage_preview_label.setMinimumSize(640, 480)
+        self.collage_status_label = CaptionLabel("拼图: -")
+        self.collage_status_label.setObjectName("mutedLabel")
+        center_layout.addWidget(self.collage_preview_label, 1)
+        center_layout.addWidget(self.collage_status_label)
+
+        controls = QWidget()
+        controls.setObjectName("settingsPanel")
+        controls.setMinimumWidth(420)
+        controls_layout = QVBoxLayout(controls)
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.setSpacing(8)
+        controls_layout.addWidget(self.collage_panel, 1)
+
+        self.collage_group_list = QListWidget()
+        self.collage_group_list.setIconSize(QSize(96, 64))
+        self.collage_group_list.setDragDropMode(QAbstractItemView.InternalMove)
+        self.collage_group_list.setDefaultDropAction(Qt.MoveAction)
+        self.collage_group_list.currentItemChanged.connect(self.on_collage_group_selected)
+        self.collage_group_list.model().rowsMoved.connect(lambda *_: self.on_collage_group_rows_moved())
+        group_label = CaptionLabel("拼图组")
+        group_label.setObjectName("mutedLabel")
+        group_buttons_1 = QHBoxLayout()
+        group_buttons_1.setSpacing(6)
+        group_buttons_1.addWidget(add_group_button)
+        group_buttons_1.addWidget(update_group_button)
+        group_buttons_2 = QHBoxLayout()
+        group_buttons_2.setSpacing(6)
+        group_buttons_2.addWidget(rename_group_button)
+        group_buttons_2.addWidget(copy_group_button)
+        group_buttons_2.addWidget(delete_group_button)
+        group_buttons_3 = QHBoxLayout()
+        group_buttons_3.setSpacing(6)
+        group_buttons_3.addWidget(self.collage_export_format_combo)
+        group_buttons_3.addWidget(export_button)
+        group_buttons_3.addWidget(batch_export_button)
+        controls_layout.addWidget(group_label)
+        controls_layout.addWidget(self.collage_group_list, 1)
+        controls_layout.addLayout(group_buttons_1)
+        controls_layout.addLayout(group_buttons_2)
+        controls_layout.addLayout(group_buttons_3)
+
+        splitter = QSplitter()
+        splitter.addWidget(left)
+        splitter.addWidget(center)
+        splitter.addWidget(controls)
+        splitter.setSizes([300, 860, 400])
+        splitter.setHandleWidth(3)
+        page_layout.addWidget(splitter, 1)
+        self.restore_collage_settings()
+        self.restore_collage_photos()
+        self.restore_collage_groups()
+        return page
+
+    def save_collage_settings(self) -> None:
+        if self._restoring_collage_settings or not hasattr(self, "collage_panel"):
+            return
+        self.settings.beginGroup("collage")
+        for key, value in self.collage_panel.settings_values().items():
+            self.settings.setValue(key, value)
+        self.settings.endGroup()
+
+    def restore_collage_settings(self) -> None:
+        if not hasattr(self, "collage_panel"):
+            return
+        self._restoring_collage_settings = True
+        self.settings.beginGroup("collage")
+        values = {key: self.settings.value(key) for key in self.settings.childKeys()}
+        self.settings.endGroup()
+        if values:
+            self.collage_panel.restore_settings_values(values)
+        self._restoring_collage_settings = False
+
+    def choose_collage_files(self) -> None:
+        dialog = self.make_file_dialog("选择拼图照片（可多选）", Path.home())
+        dialog.setFileMode(QFileDialog.ExistingFiles)
+        dialog.setNameFilter("图片 (*.jpg *.jpeg *.png *.tif *.tiff *.webp)")
+        if dialog.exec() == QDialog.Accepted:
+            self.collage_selector.add_files(dialog.selectedFiles())
+            self.save_collage_photo_paths()
+
+    def clear_collage_photos(self) -> None:
+        self.collage_preview_request_id += 1
+        self.collage_selector.clear()
+        self.collage_preview_label.clear()
+        self.collage_preview_label.setText("请选择参与拼图的照片")
+        self.collage_status_label.setText("拼图: -")
+        self.settings.remove("collage_photo_paths")
+
+    def restore_collage_photos(self) -> None:
+        if not hasattr(self, "collage_selector"):
+            return
+        raw_paths = self.settings.value("collage_photo_paths", [])
+        if isinstance(raw_paths, str):
+            raw_paths = [raw_paths]
+        existing_paths = [
+            str(path)
+            for path in raw_paths
+            if Path(str(path)).is_file() and Path(str(path)).suffix.lower() in IMAGE_EXTENSIONS
+        ]
+        if existing_paths:
+            self.collage_selector.add_files(existing_paths)
+
+    def save_collage_photo_paths(self) -> None:
+        if not hasattr(self, "collage_selector"):
+            return
+        self.settings.setValue("collage_photo_paths", [str(path) for path in self.collage_selector.all_photos()])
+
+    def restore_collage_groups(self) -> None:
+        text = str(self.settings.value("collage_groups_json", ""))
+        self.collage_group_store = CollageGroupStore.from_json(text, IMAGE_EXTENSIONS)
+        self.save_collage_groups()
+        self.refresh_collage_group_list()
+
+    def save_collage_groups(self) -> None:
+        self.settings.setValue("collage_groups_json", self.collage_group_store.to_json())
+
+    def mark_collage_dirty(self) -> None:
+        if self._loading_collage_group or self._restoring_collage_settings:
+            return
+        self.collage_dirty = True
+        self.update_collage_group_dirty_marker()
+
+    def current_collage_paths(self) -> list[Path]:
+        return self.collage_selector.selected_photos()
+
+    def current_collage_group(self) -> CollageGroup | None:
+        if not self.current_collage_group_id:
+            return None
+        return self.collage_group_store.by_id(self.current_collage_group_id)
+
+    def add_collage_group(self) -> None:
+        paths = self.current_collage_paths()
+        if not paths:
+            QMessageBox.information(self, "没有照片", "请先选择参与拼图的照片。")
+            return
+        group = CollageGroup.create(
+            self.collage_group_store.next_name(),
+            paths,
+            self.collage_panel.current_layout(),
+            self.collage_panel.options(),
+            self.collage_panel.quality_spin.value(),
+        )
+        self.collage_group_store.groups.append(group)
+        self.current_collage_group_id = group.id
+        self.collage_dirty = False
+        self.save_collage_groups()
+        self.refresh_collage_group_list(select_id=group.id)
+
+    def update_current_collage_group(self) -> None:
+        group = self.current_collage_group()
+        if group is None:
+            self.add_collage_group()
+            return
+        paths = self.current_collage_paths()
+        if not paths:
+            QMessageBox.information(self, "没有照片", "请先选择参与拼图的照片。")
+            return
+        group.update_from_editor(
+            paths,
+            self.collage_panel.current_layout(),
+            self.collage_panel.options(),
+            self.collage_panel.quality_spin.value(),
+        )
+        self.collage_dirty = False
+        self.save_collage_groups()
+        self.refresh_collage_group_list(select_id=group.id)
+
+    def rename_current_collage_group(self) -> None:
+        group = self.current_collage_group()
+        if group is None:
+            QMessageBox.information(self, "没有拼图组", "请先选择一个拼图组。")
+            return
+        name, ok = QInputDialog.getText(self, "重命名拼图组", "组名：", text=group.name)
+        if not ok or not name.strip():
+            return
+        group.name = name.strip()
+        group.updated_at = timestamp()
+        self.save_collage_groups()
+        self.refresh_collage_group_list(select_id=group.id)
+
+    def copy_current_collage_group(self) -> None:
+        group = self.current_collage_group()
+        if group is None:
+            QMessageBox.information(self, "没有拼图组", "请先选择一个拼图组。")
+            return
+        new_group = group.copy(self.collage_group_store.duplicate_name(group.name))
+        self.collage_group_store.groups.append(new_group)
+        self.current_collage_group_id = new_group.id
+        self.collage_dirty = False
+        self.save_collage_groups()
+        self.refresh_collage_group_list(select_id=new_group.id)
+        self.apply_collage_group(new_group)
+
+    def delete_current_collage_group(self) -> None:
+        group = self.current_collage_group()
+        if group is None:
+            QMessageBox.information(self, "没有拼图组", "请先选择一个拼图组。")
+            return
+        reply = QMessageBox.question(
+            self,
+            "删除拼图组",
+            f"确定删除 \"{group.name}\" 吗？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self.collage_group_store.remove(group.id)
+        self.current_collage_group_id = ""
+        self.collage_dirty = False
+        self.save_collage_groups()
+        self.refresh_collage_group_list()
+
+    def on_collage_group_selected(self, current: QListWidgetItem | None) -> None:
+        if self._loading_collage_group or current is None:
+            return
+        group_id = str(current.data(Qt.UserRole) or "")
+        if not group_id or group_id == self.current_collage_group_id:
+            return
+        if not self.confirm_collage_group_switch():
+            self.select_collage_group_item(self.current_collage_group_id)
+            return
+        group = self.collage_group_store.by_id(group_id)
+        if group is not None:
+            self.apply_collage_group(group)
+
+    def confirm_collage_group_switch(self) -> bool:
+        if not self.collage_dirty:
+            return True
+        box = QMessageBox(self)
+        box.setWindowTitle("保存当前修改？")
+        box.setText("当前拼图组有未保存修改，切换前是否保存？")
+        save_button = box.addButton("保存并切换", QMessageBox.AcceptRole)
+        discard_button = box.addButton("不保存", QMessageBox.DestructiveRole)
+        cancel_button = box.addButton("取消", QMessageBox.RejectRole)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked == cancel_button:
+            return False
+        if clicked == save_button:
+            self.update_current_collage_group()
+        elif clicked == discard_button:
+            self.collage_dirty = False
+        return True
+
+    def apply_collage_group(self, group: CollageGroup) -> None:
+        valid_paths = group.valid_paths(IMAGE_EXTENSIONS)
+        if not valid_paths:
+            self.collage_group_store.remove(group.id)
+            self.save_collage_groups()
+            self.refresh_collage_group_list()
+            return
+        self._loading_collage_group = True
+        self.collage_selector.add_files([str(path) for path in valid_paths])
+        self.collage_selector.set_selected_photos(valid_paths)
+        self.collage_panel.apply_group_values(group.layout_name, group.options)
+        self.collage_panel.set_quality(group.jpg_quality)
+        self.current_collage_group_id = group.id
+        self.collage_dirty = False
+        self._loading_collage_group = False
+        self.schedule_collage_preview()
+
+    def refresh_collage_group_list(self, select_id: str = "") -> None:
+        if not hasattr(self, "collage_group_list"):
+            return
+        current_id = select_id or self.current_collage_group_id
+        self.collage_group_list.blockSignals(True)
+        self.collage_group_list.clear()
+        for group in self.collage_group_store.groups:
+            item = QListWidgetItem(self.collage_group_item_text(group))
+            item.setData(Qt.UserRole, group.id)
+            item.setToolTip("\n".join(group.photo_paths))
+            item.setFlags(item.flags() | Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled)
+            thumb = self.collage_group_thumbnail(group)
+            if thumb is not None:
+                item.setIcon(thumb)
+            self.collage_group_list.addItem(item)
+            if group.id == current_id:
+                self.collage_group_list.setCurrentItem(item)
+        self.collage_group_list.blockSignals(False)
+
+    def collage_group_item_text(self, group: CollageGroup) -> str:
+        prefix = "* " if group.id == self.current_collage_group_id and self.collage_dirty else ""
+        return f"{prefix}{group.name}\n{len(group.photo_paths)} 张 · {group.layout_name}"
+
+    def update_collage_group_dirty_marker(self) -> None:
+        if not hasattr(self, "collage_group_list") or not self.current_collage_group_id:
+            return
+        for index in range(self.collage_group_list.count()):
+            item = self.collage_group_list.item(index)
+            group_id = str(item.data(Qt.UserRole) or "")
+            group = self.collage_group_store.by_id(group_id)
+            if group is not None:
+                item.setText(self.collage_group_item_text(group))
+
+    def on_collage_group_rows_moved(self) -> None:
+        if not hasattr(self, "collage_group_list"):
+            return
+        ordered_ids = [
+            str(self.collage_group_list.item(index).data(Qt.UserRole) or "")
+            for index in range(self.collage_group_list.count())
+        ]
+        self.collage_group_store.reorder(ordered_ids)
+        self.save_collage_groups()
+
+    def select_collage_group_item(self, group_id: str) -> None:
+        self.collage_group_list.blockSignals(True)
+        for index in range(self.collage_group_list.count()):
+            item = self.collage_group_list.item(index)
+            if str(item.data(Qt.UserRole) or "") == group_id:
+                self.collage_group_list.setCurrentItem(item)
+                break
+        self.collage_group_list.blockSignals(False)
+
+    def collage_group_thumbnail(self, group: CollageGroup):
+        try:
+            image = self.collage_engine.create_collage_from_paths(
+                [Path(path) for path in group.photo_paths],
+                layout_by_name(group.layout_name),
+                group.options,
+                max_source_edge=260,
+            )
+            image.thumbnail((96, 64), Image.Resampling.LANCZOS)
+            return QIcon(QPixmap.fromImage(ImageQt(image.convert("RGBA"))))
+        except Exception:
+            return None
+
+    def schedule_collage_preview(self) -> None:
+        if hasattr(self, "collage_preview_timer"):
+            self.collage_preview_timer.start(160)
+
+    def update_collage_preview(self) -> None:
+        if not hasattr(self, "collage_selector"):
+            return
+        paths = self.collage_selector.selected_photos()
+        if not paths:
+            self.collage_preview_label.clear()
+            self.collage_preview_label.setText("请选择参与拼图的照片")
+            self.collage_status_label.setText("拼图: -")
+            return
+        layout = self.collage_panel.current_layout()
+        options = self.collage_panel.options()
+        target_edge = max(
+            640,
+            min(
+                PREVIEW_MAX_SOURCE_EDGE,
+                int(max(self.collage_preview_label.width(), self.collage_preview_label.height()) * 1.5),
+            ),
+        )
+        self.collage_preview_request_id += 1
+        request_id = self.collage_preview_request_id
+        self.collage_status_label.setText(f"拼图: {layout.name}    正在生成预览...")
+        thread = QThread(self)
+        worker = CollagePreviewWorker(request_id, paths, layout, options, target_edge)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self.on_collage_preview_finished)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda t=thread, w=worker: self.clear_collage_preview_job(t, w))
+        self.collage_preview_jobs.append((thread, worker))
+        thread.start()
+
+    def on_collage_preview_finished(
+        self,
+        request_id: int,
+        rendered,
+        error: str,
+        layout_name: str,
+        selected_count: int,
+        cell_count: int,
+        original_size: tuple[int, int],
+    ) -> None:
+        if request_id != self.collage_preview_request_id:
+            return
+        if error:
+            self.collage_preview_label.setText(f"预览失败: {error}")
+            self.collage_status_label.setText("拼图: 预览失败")
+            return
+        preview = rendered.copy()
+        preview.thumbnail(
+            (self.collage_preview_label.width() - 24, self.collage_preview_label.height() - 24),
+            resample=Image.Resampling.LANCZOS,
+        )
+        pixmap = QPixmap.fromImage(ImageQt(preview.convert("RGBA")))
+        self.collage_preview_label.setPixmap(pixmap)
+        extra = ""
+        if selected_count > cell_count:
+            extra = f"    已选择 {selected_count} 张，仅使用前 {cell_count} 张"
+        elif selected_count < cell_count:
+            extra = f"    已选择 {selected_count} 张，空位显示背景色"
+        self.collage_status_label.setText(
+            f"拼图: {layout_name}    预览: {preview.width} x {preview.height}    导出: {original_size[0]} x {original_size[1]}{extra}"
+        )
+
+    def clear_collage_preview_job(self, thread: QThread, worker: CollagePreviewWorker) -> None:
+        self.collage_preview_jobs = [job for job in self.collage_preview_jobs if job != (thread, worker)]
+
+    def export_collage(self) -> None:
+        paths = self.collage_selector.selected_photos()
+        if not paths:
+            QMessageBox.information(self, "没有照片", "请先选择参与拼图的照片。")
+            return
+        output = self.choose_export_file(self.last_export_dir() / "collage.jpg")
+        if not output:
+            return
+        self.save_last_export_dir(output.parent)
+        try:
+            rendered = self.collage_engine.create_collage_from_paths(
+                paths,
+                self.collage_panel.current_layout(),
+                self.collage_panel.options(),
+            )
+            save_rendered(rendered, output, self.collage_panel.quality_spin.value())
+        except Exception as exc:
+            QMessageBox.warning(self, "导出失败", str(exc))
+            return
+        QMessageBox.information(self, "已导出", "拼图导出完成。")
+
+    def export_collage_groups(self) -> None:
+        groups: list[CollageGroup] = []
+        for group in self.collage_group_store.groups:
+            valid_paths = group.valid_paths(IMAGE_EXTENSIONS)
+            if valid_paths:
+                group.photo_paths = [str(path) for path in valid_paths]
+                groups.append(group)
+        self.collage_group_store.groups = groups
+        self.save_collage_groups()
+        self.refresh_collage_group_list()
+        if not groups:
+            QMessageBox.information(self, "没有拼图组", "请先暂存至少一个拼图组。")
+            return
+        if self.collage_batch_thread is not None:
+            QMessageBox.information(self, "正在导出", "当前已有拼图组导出任务正在运行。")
+            return
+        directory = self.choose_directory("选择拼图组批量导出目录", self.last_export_dir())
+        if not directory:
+            return
+        self.save_last_export_dir(directory)
+        suffix = str(self.collage_export_format_combo.currentData() or ".jpg")
+        used_names: set[str] = set()
+        jobs = [
+            (group, directory / safe_filename(group.name, used_names, suffix), group.jpg_quality)
+            for group in groups
+        ]
+        self.start_collage_group_export(jobs)
+
+    def start_collage_group_export(self, jobs: list[tuple[CollageGroup, Path, int]]) -> None:
+        thread = QThread(self)
+        worker = CollageBatchExportWorker(jobs)
+        dialog = ExportProgressDialog(len(jobs), self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(dialog.update_progress)
+        worker.finished.connect(self.on_collage_group_export_finished)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self.clear_collage_group_export_task)
+        dialog.cancelRequested.connect(worker.cancel)
+
+        self.collage_batch_thread = thread
+        self.collage_batch_worker = worker
+        self.collage_batch_dialog = dialog
+        dialog.show()
+        thread.start()
+
+    def on_collage_group_export_finished(self, completed: int, total: int, canceled: bool, message: str) -> None:
+        if self.collage_batch_dialog:
+            self.collage_batch_dialog.accept()
+        if canceled:
+            QMessageBox.information(self, "导出已取消", f"已导出 {completed} / {total} 个拼图组。")
+        elif message:
+            QMessageBox.warning(self, "导出完成但有错误", f"已导出 {completed} / {total} 个拼图组。\n\n{message}")
+        else:
+            QMessageBox.information(self, "批量导出完成", f"已导出 {completed} 个拼图组。")
+
+    def clear_collage_group_export_task(self) -> None:
+        self.collage_batch_thread = None
+        self.collage_batch_worker = None
+        self.collage_batch_dialog = None
 
     def apply_window_style(self) -> None:
         dark = self.current_theme_is_dark()
@@ -855,6 +1323,9 @@ class MainWindow(FluentWindow):
         self.setStyleSheet(
             f"""
             QWidget#watermarkPage {{
+                background-color: {bg};
+            }}
+            QWidget#collagePage {{
                 background-color: {bg};
             }}
             QWidget#settingsPanel,
@@ -1583,6 +2054,7 @@ class MainWindow(FluentWindow):
             self.titleBar.move(0, 0)
             self.titleBar.resize(self.width(), self.titleBar.height())
         self.schedule_preview()
+        self.schedule_collage_preview()
 
     def systemTitleBarRect(self, size: QSize) -> QRect:
         if sys.platform == "darwin":
