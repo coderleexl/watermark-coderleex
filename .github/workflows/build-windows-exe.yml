@@ -32,8 +32,8 @@ jobs:
 
       - name: Run tests
         run: |
-          python -m py_compile watermark_app/core/collage.py watermark_app/core/collage_groups.py watermark_app/ui/common.py watermark_app/ui/collage_selector.py watermark_app/ui/collage_panel.py watermark_app/ui/main_window.py app.py scripts/smoke_collage.py tests/test_collage.py tests/test_collage_ui.py
-          python -m unittest tests.test_collage tests.test_collage_ui
+          python -m py_compile watermark_app/core/collage.py watermark_app/core/collage_groups.py watermark_app/core/culling.py watermark_app/core/contact_sheet.py watermark_app/core/social_export.py watermark_app/core/batch_rename.py watermark_app/ui/common.py watermark_app/ui/collage_selector.py watermark_app/ui/collage_panel.py watermark_app/ui/culling_page.py watermark_app/ui/contact_sheet_page.py watermark_app/ui/social_export_page.py watermark_app/ui/batch_rename_page.py watermark_app/ui/main_window.py app.py scripts/smoke_collage.py tests/test_collage.py tests/test_collage_ui.py tests/test_culling.py tests/test_culling_ui.py tests/test_photo_tools.py
+          python -m unittest tests.test_collage tests.test_collage_ui tests.test_culling tests.test_culling_ui tests.test_photo_tools
           python scripts/smoke_collage.py
 
       - name: Build EXE

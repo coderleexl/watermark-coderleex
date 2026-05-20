@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QSplitter,
+    QStackedWidget,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -54,12 +55,17 @@ from watermark_app.core.collage_groups import (
     timestamp,
 )
 from watermark_app.core.exif import PhotoMetadata, read_photo_metadata
+from watermark_app.core.i18n import LANGUAGE_EN, LANGUAGE_ZH, set_language, tr
 from watermark_app.core.presets import Preset, PresetManager
 from watermark_app.core.renderer import render_image, save_rendered, TITLE_FONTS
 from watermark_app.core.templates import BlurStyle, RenderOptions, TemplateKind, WatermarkPosition
 from watermark_app.ui.collage_panel import CollagePanel
 from watermark_app.ui.collage_selector import CollagePhotoSelector
 from watermark_app.ui.common import CollapsibleSection, NumericSlider, make_settings_page
+from watermark_app.ui.batch_rename_page import BatchRenamePage
+from watermark_app.ui.contact_sheet_page import ContactSheetPage
+from watermark_app.ui.culling_page import PhotoCullingPage
+from watermark_app.ui.social_export_page import SocialExportPage
 
 
 LEGACY_WATERMARK_DIR = Path("/Users/lixinglin/Documents/水印")
@@ -360,6 +366,7 @@ class MainWindow(FluentWindow):
         self.photo_paths: list[Path] = []
         self.current_metadata = PhotoMetadata()
         self.settings = QSettings("coderleex", "watermark")
+        set_language(str(self.settings.value("appearance/language", LANGUAGE_ZH)))
         self._restoring_settings = False
         self._restoring_collage_settings = False
         self.current_ratio_key = "default"
@@ -408,6 +415,11 @@ class MainWindow(FluentWindow):
         self.appearance_theme_combo.addItem("浅色", userData="LIGHT")
         self.appearance_theme_combo.addItem("深色", userData="DARK")
         self.set_combo_value(self.appearance_theme_combo, self.settings.value("appearance/theme", "AUTO"))
+
+        self.language_combo = QComboBox()
+        self.language_combo.addItem("中文", userData=LANGUAGE_ZH)
+        self.language_combo.addItem("English", userData=LANGUAGE_EN)
+        self.set_combo_value(self.language_combo, self.settings.value("appearance/language", LANGUAGE_ZH))
 
         self.theme_color_combo = QComboBox()
         for label, color in [
@@ -606,8 +618,12 @@ class MainWindow(FluentWindow):
         export_section.form.addRow("JPG 质量", self.quality_spin)
 
         appearance_section = CollapsibleSection("外观")
+        self.language_note_label = CaptionLabel(tr("settings.language_restart"))
+        self.language_note_label.setObjectName("mutedLabel")
+        appearance_section.form.addRow(tr("settings.language"), self.language_combo)
         appearance_section.form.addRow("主题", self.appearance_theme_combo)
         appearance_section.form.addRow("主题色", self.theme_color_combo)
+        appearance_section.form.addRow("", self.language_note_label)
 
         setting_pages = [
             ("canvas", "画布", make_settings_page(canvas_section)),
@@ -659,8 +675,8 @@ class MainWindow(FluentWindow):
         splitter.setSizes([250, 880, 440])
         splitter.setHandleWidth(3)
         page_layout.addWidget(splitter, 1)
-        self.addSubInterface(page, FluentIcon.PHOTO, "水印")
-        self.addSubInterface(self.create_collage_page(), FluentIcon.ALBUM, "拼图")
+        self.addSubInterface(page, FluentIcon.PHOTO, tr("app.watermark"))
+        self.addSubInterface(self.create_collage_page(), FluentIcon.ALBUM, tr("app.collage_tools"))
         self.refresh_theme_styles()
 
         for widget in [
@@ -711,6 +727,7 @@ class MainWindow(FluentWindow):
         self.connect_render_setting_signals()
         self.appearance_theme_combo.currentIndexChanged.connect(self.on_theme_changed)
         self.theme_color_combo.currentIndexChanged.connect(self.on_theme_changed)
+        self.language_combo.currentIndexChanged.connect(self.on_language_changed)
         self.template_combo.currentIndexChanged.connect(self.on_template_changed)
         self.preset_combo.currentIndexChanged.connect(self.on_preset_selected)
         self.save_preset_button.clicked.connect(self.save_current_preset)
@@ -741,6 +758,30 @@ class MainWindow(FluentWindow):
         self.settings.setValue("appearance/theme_color", color)
         self.apply_fluent_theme(str(mode), str(color))
         self.refresh_theme_styles()
+
+    def on_language_changed(self) -> None:
+        language = str(self.language_combo.currentData() or LANGUAGE_ZH)
+        self.settings.setValue("appearance/language", language)
+        set_language(language)
+        self.language_note_label.setText(tr("settings.language_restart"))
+        for widget in [
+            getattr(self, "culling_page", None),
+            getattr(self, "contact_sheet_page", None),
+            getattr(self, "social_export_page", None),
+            getattr(self, "batch_rename_page", None),
+        ]:
+            if widget is not None and hasattr(widget, "refresh_texts"):
+                widget.refresh_texts()
+        if hasattr(self, "collage_title_label"):
+            self.collage_title_label.setText(tr("app.collage_tools"))
+        if hasattr(self, "collage_tabs"):
+            current_route = self.collage_tabs.currentRouteKey()
+            self.collage_tool_tabs = self.collage_tool_tab_labels()
+            self.collage_tabs.clear()
+            for route, label in self.collage_tool_tabs:
+                self.collage_tabs.addItem(route, label, onClick=lambda _, r=route: self.switch_collage_tool(r))
+            self.collage_tabs.setCurrentItem(current_route or "collage")
+            self.switch_collage_tool(current_route or "collage")
 
     def apply_fluent_theme(self, mode: str, color: str) -> None:
         theme = {
@@ -808,7 +849,17 @@ class MainWindow(FluentWindow):
         page_layout = QVBoxLayout(page)
         page_layout.setContentsMargins(16, 8, 16, 16)
         page_layout.setSpacing(10)
-        page_layout.addWidget(TitleLabel("Coderleex Collage"))
+        self.collage_tabs = SegmentedWidget()
+        self.collage_stack = QStackedWidget()
+        self.collage_stack.setObjectName("collageToolStack")
+        page_layout.addWidget(self.collage_tabs)
+        page_layout.addWidget(self.collage_stack, 1)
+
+        editor = QWidget()
+        editor.setObjectName("collageEditorPage")
+        editor_layout = QVBoxLayout(editor)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
+        editor_layout.setSpacing(10)
 
         left = QWidget()
         left_layout = QVBoxLayout(left)
@@ -876,11 +927,44 @@ class MainWindow(FluentWindow):
         splitter.addWidget(controls)
         splitter.setSizes([300, 860, 400])
         splitter.setHandleWidth(3)
-        page_layout.addWidget(splitter, 1)
+        editor_layout.addWidget(splitter, 1)
+        self.culling_page = PhotoCullingPage(self.settings, IMAGE_EXTENSIONS)
+        self.contact_sheet_page = ContactSheetPage(IMAGE_EXTENSIONS)
+        self.social_export_page = SocialExportPage(IMAGE_EXTENSIONS)
+        self.batch_rename_page = BatchRenamePage(IMAGE_EXTENSIONS)
+        collage_tool_pages = [
+            ("collage", editor),
+            ("culling", self.culling_page),
+            ("contact", self.contact_sheet_page),
+            ("social", self.social_export_page),
+            ("rename", self.batch_rename_page),
+        ]
+        self.collage_tool_tabs = self.collage_tool_tab_labels()
+        self.collage_tool_page_indexes = {}
+        for index, (route, tool_page) in enumerate(collage_tool_pages):
+            self.collage_stack.addWidget(tool_page)
+            self.collage_tool_page_indexes[route] = index
+        for route, label in self.collage_tool_tabs:
+            self.collage_tabs.addItem(route, label, onClick=lambda _, r=route: self.switch_collage_tool(r))
+        self.collage_tabs.setCurrentItem("collage")
+        self.collage_stack.setCurrentIndex(0)
         self.restore_collage_settings()
         self.restore_collage_photos()
         self.restore_collage_groups()
         return page
+
+    def collage_tool_tab_labels(self) -> list[tuple[str, str]]:
+        return [
+            ("collage", tr("app.collage")),
+            ("culling", tr("app.culling")),
+            ("contact", tr("app.contact_sheet")),
+            ("social", tr("app.social_export")),
+            ("rename", tr("app.batch_rename")),
+        ]
+
+    def switch_collage_tool(self, route: str) -> None:
+        if hasattr(self, "collage_stack"):
+            self.collage_stack.setCurrentIndex(self.collage_tool_page_indexes.get(route, 0))
 
     def save_collage_settings(self) -> None:
         if self._restoring_collage_settings or not hasattr(self, "collage_panel"):

@@ -44,6 +44,14 @@ python3 app.py
   - 支持自定义比例、宽高、长边、间距、圆角和背景色
   - 支持拼图组暂存、更新、重命名、复制、删除和拖拽排序
   - 支持拼图组缩略图、未保存标记和 JPG / PNG 批量导出
+- 选片工具：
+  - 支持照片导入、大图预览、星级评分、颜色标签和保留/淘汰状态
+  - 支持按最低星级和状态筛选
+  - 支持复制精选照片到新目录
+  - 选片状态会在下次启动时恢复
+- 联系表 / 样片墙：批量照片生成带文件名的样片墙，支持列数、缩略图尺寸和背景色
+- 社交媒体导出：内置小红书、Instagram、Story/Reels、B站/YouTube 封面尺寸，支持完整显示或裁切填满
+- 批量重命名：支持 `{date}`、`{index}`、`{stem}` 模板预览和批量执行
 
 ## 水印素材
 
@@ -94,8 +102,8 @@ CoderleexWatermark-Windows.zip
 ## 测试
 
 ```bash
-python3 -m py_compile watermark_app/core/collage.py watermark_app/core/collage_groups.py watermark_app/ui/common.py watermark_app/ui/collage_selector.py watermark_app/ui/collage_panel.py watermark_app/ui/main_window.py app.py scripts/smoke_collage.py tests/test_collage.py tests/test_collage_ui.py
-python3 -m unittest tests.test_collage tests.test_collage_ui
+python3 -m py_compile watermark_app/core/collage.py watermark_app/core/collage_groups.py watermark_app/core/culling.py watermark_app/core/contact_sheet.py watermark_app/core/social_export.py watermark_app/core/batch_rename.py watermark_app/ui/common.py watermark_app/ui/collage_selector.py watermark_app/ui/collage_panel.py watermark_app/ui/culling_page.py watermark_app/ui/contact_sheet_page.py watermark_app/ui/social_export_page.py watermark_app/ui/batch_rename_page.py watermark_app/ui/main_window.py app.py scripts/smoke_collage.py tests/test_collage.py tests/test_collage_ui.py tests/test_culling.py tests/test_culling_ui.py tests/test_photo_tools.py
+python3 -m unittest tests.test_collage tests.test_collage_ui tests.test_culling tests.test_culling_ui tests.test_photo_tools
 python3 scripts/smoke_collage.py
 ```
 
